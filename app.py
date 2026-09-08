@@ -131,6 +131,22 @@ category_sales = (
 )
 
 st.bar_chart(category_sales)
+# --------------------------------------------------
+# TOP PRODUCTS
+# --------------------------------------------------
+
+st.divider()
+
+st.subheader("🏆 Top Performing Products")
+
+product_sales = (
+    df.groupby("Product")["Sales"]
+    .sum()
+    .sort_values(ascending=False)
+    .head(10)
+)
+
+st.bar_chart(product_sales)
 
 
 # --------------------------------------------------
