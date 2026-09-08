@@ -119,101 +119,189 @@ st.line_chart(chart_data)
 
 
 # --------------------------------------------------
-# PREDICTION SECTION
+# FUTURE FORECASTING
 # --------------------------------------------------
 
 st.divider()
 
-st.subheader("🔮 Sales Prediction")
+st.subheader("🔮 Future Sales Forecast")
 
 st.write(
-    "Select a date from the available dataset to generate "
-    "a machine-learning prediction."
+    "Predict sales for the upcoming days using historical sales patterns "
+    "and the trained XGBoost model."
 )
 
-selected_date = st.date_input(
-    "Select Date",
-    value=df["Date"].max().date(),
-    min_value=df["Date"].min().date(),
-    max_value=df["Date"].max().date()
+forecast_days = st.selectbox(
+    "Forecast Horizon",
+    [7, 30],
+    format_func=lambda x: f"Next {x} Days"
 )
 
 
 # --------------------------------------------------
-# CREATE FEATURES FOR SELECTED DATE
+# PREPARE DAILY SALES DATA
 # --------------------------------------------------
 
-def create_prediction_features(data, selected_date):
+daily_sales = (
+    df.groupby("Date", as_index=False)["Sales"]
+    .sum()
+    .sort_values("Date")
+    .reset_index(drop=True)
+)
 
-    data = data.sort_values("Date").copy()
 
-    target_date = pd.Timestamp(selected_date)
+# --------------------------------------------------
+# CREATE FEATURES FOR FUTURE DATE
+# --------------------------------------------------
 
-    row = data[data["Date"] == target_date]
+def create_future_features(history, target_date):
 
-    if row.empty:
-        return None
-
-    index = row.index[0]
+    sales = history["Sales"].tolist()
 
     features = {
-        "lag_1": data.loc[index, "Sales"] if index >= 1 else None,
-        "lag_7": data.loc[index - 7, "Sales"] if index >= 7 else None,
-        "lag_14": data.loc[index - 14, "Sales"] if index >= 14 else None,
-        "lag_30": data.loc[index - 30, "Sales"] if index >= 30 else None,
+        "lag_1": sales[-1],
+        "lag_7": sales[-7],
+        "lag_14": sales[-14],
+        "lag_30": sales[-30],
+        "rolling_mean_7": sum(sales[-7:]) / 7,
+        "rolling_mean_14": sum(sales[-14:]) / 14,
+        "rolling_mean_30": sum(sales[-30:]) / 30,
+        "day_of_week": target_date.dayofweek,
+        "month": target_date.month,
+        "quarter": target_date.quarter,
+        "week_of_year": target_date.isocalendar().week,
+        "is_weekend": int(target_date.dayofweek >= 5)
     }
-
-    if any(value is None for value in features.values()):
-        return None
-
-    sales_series = data["Sales"]
-
-    features["rolling_mean_7"] = (
-        sales_series.iloc[index - 7:index].mean()
-    )
-
-    features["rolling_mean_14"] = (
-        sales_series.iloc[index - 14:index].mean()
-    )
-
-    features["rolling_mean_30"] = (
-        sales_series.iloc[index - 30:index].mean()
-    )
-
-    features["day_of_week"] = target_date.dayofweek
-    features["month"] = target_date.month
-    features["quarter"] = target_date.quarter
-    features["week_of_year"] = target_date.isocalendar().week
-    features["is_weekend"] = int(target_date.dayofweek >= 5)
 
     return pd.DataFrame([features])
 
 
 # --------------------------------------------------
-# PREDICT
+# GENERATE FUTURE FORECAST
 # --------------------------------------------------
 
-if st.button("🚀 Predict Sales", type="primary"):
+if st.button("🚀 Generate Forecast", type="primary"):
 
-    X = create_prediction_features(df, selected_date)
+    history = daily_sales.copy()
 
-    if X is None:
+    forecasts = []
 
-        st.error(
-            "Not enough historical data available to generate "
-            "features for this date."
+    last_date = history["Date"].max()
+
+    for i in range(1, forecast_days + 1):
+
+        future_date = last_date + pd.Timedelta(days=i)
+
+        X_future = create_future_features(
+            history,
+            future_date
         )
-
-    else:
 
         # Make sure feature order matches training
-        X = X[feature_columns]
+        X_future = X_future[feature_columns]
 
-        prediction = model.predict(X)[0]
+        prediction = model.predict(X_future)[0]
 
-        st.success("Prediction generated successfully!")
+        # Avoid negative sales predictions
+        prediction = max(0, prediction)
 
-        st.metric(
-            "Predicted Sales",
-            f"₹{prediction:,.2f}"
+        forecasts.append({
+            "Date": future_date,
+            "Predicted Sales": prediction
+        })
+
+        # Add prediction to history
+        history = pd.concat(
+            [
+                history,
+                pd.DataFrame({
+                    "Date": [future_date],
+                    "Sales": [prediction]
+                })
+            ],
+            ignore_index=True
         )
+
+
+    forecast_df = pd.DataFrame(forecasts)
+
+
+    # --------------------------------------------------
+    # FORECAST SUMMARY
+    # --------------------------------------------------
+
+    total_forecast = forecast_df["Predicted Sales"].sum()
+    average_forecast = forecast_df["Predicted Sales"].mean()
+
+    col1, col2, col3 = st.columns(3)
+
+    with col1:
+        st.metric(
+            "Forecast Period",
+            f"{forecast_days} Days"
+        )
+
+    with col2:
+        st.metric(
+            "Expected Sales",
+            f"₹{total_forecast:,.0f}"
+        )
+
+    with col3:
+        st.metric(
+            "Average Daily Sales",
+            f"₹{average_forecast:,.0f}"
+        )
+
+
+    # --------------------------------------------------
+    # FORECAST CHART
+    # --------------------------------------------------
+
+    st.subheader("📈 Sales Forecast")
+
+    chart_history = daily_sales.tail(60).copy()
+
+    chart_history = chart_history.rename(
+        columns={"Sales": "Historical Sales"}
+    )
+
+    chart_forecast = forecast_df.set_index("Date")[
+        ["Predicted Sales"]
+    ]
+
+    chart_history = chart_history.set_index("Date")
+
+    combined_chart = pd.concat(
+        [
+            chart_history,
+            chart_forecast
+        ],
+        axis=1
+    )
+
+    st.line_chart(combined_chart)
+
+
+    # --------------------------------------------------
+    # FORECAST TABLE
+    # --------------------------------------------------
+
+    st.subheader("📅 Forecast Details")
+
+    display_forecast = forecast_df.copy()
+
+    display_forecast["Date"] = (
+        display_forecast["Date"].dt.strftime("%d %b %Y")
+    )
+
+    display_forecast["Predicted Sales"] = (
+        display_forecast["Predicted Sales"]
+        .round(2)
+    )
+
+    st.dataframe(
+        display_forecast,
+        use_container_width=True,
+        hide_index=True
+    )
