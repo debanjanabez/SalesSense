@@ -116,6 +116,21 @@ st.subheader("📊 Sales Trend")
 chart_data = df.set_index("Date")[["Sales"]]
 
 st.line_chart(chart_data)
+# --------------------------------------------------
+# CATEGORY PERFORMANCE
+# --------------------------------------------------
+
+st.divider()
+
+st.subheader("📊 Sales by Category")
+
+category_sales = (
+    df.groupby("Category")["Sales"]
+    .sum()
+    .sort_values(ascending=False)
+)
+
+st.bar_chart(category_sales)
 
 
 # --------------------------------------------------
