@@ -147,6 +147,38 @@ product_sales = (
 )
 
 st.bar_chart(product_sales)
+# --------------------------------------------------
+# BUSINESS INSIGHTS
+# --------------------------------------------------
+
+st.divider()
+
+st.subheader("💡 Business Insights")
+
+total_sales = df["Sales"].sum()
+average_daily_sales = df["Sales"].mean()
+highest_daily_sales = df["Sales"].max()
+
+best_category = category_sales.index[0]
+best_category_sales = category_sales.iloc[0]
+
+best_product = product_sales.index[0]
+best_product_sales = product_sales.iloc[0]
+
+st.markdown(
+    f"""
+    ### 📈 Overall Performance
+
+    - **Total sales:** ₹{total_sales:,.0f}
+    - **Average daily sales:** ₹{average_daily_sales:,.0f}
+    - **Highest recorded sale:** ₹{highest_daily_sales:,.0f}
+
+    ### 🏆 Top Performers
+
+    - **Best category:** {best_category} — ₹{best_category_sales:,.0f}
+    - **Top product:** {best_product} — ₹{best_product_sales:,.0f}
+    """
+)
 
 
 # --------------------------------------------------
