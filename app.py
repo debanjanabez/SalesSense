@@ -179,6 +179,40 @@ st.markdown(
     - **Top product:** {best_product} — ₹{best_product_sales:,.0f}
     """
 )
+# --------------------------------------------------
+# SALES TREND ANALYSIS
+# --------------------------------------------------
+
+recent_sales = df.sort_values("Date").tail(7)["Sales"].mean()
+previous_sales = df.sort_values("Date").iloc[-14:-7]["Sales"].mean()
+
+change_percentage = (
+    (recent_sales - previous_sales)
+    / previous_sales
+) * 100
+
+st.subheader("📈 Sales Trend")
+
+if change_percentage > 5:
+    st.success(
+        f"📈 Sales are increasing. "
+        f"Recent sales are {change_percentage:.1f}% higher "
+        f"than the previous 7-day period."
+    )
+
+elif change_percentage < -5:
+    st.warning(
+        f"📉 Sales are declining. "
+        f"Recent sales are {abs(change_percentage):.1f}% lower "
+        f"than the previous 7-day period."
+    )
+
+else:
+    st.info(
+        f"➡️ Sales are relatively stable. "
+        f"The change over the previous 7-day period is "
+        f"{change_percentage:+.1f}%."
+    )
 
 
 # --------------------------------------------------
