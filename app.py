@@ -213,7 +213,118 @@ else:
         f"The change over the previous 7-day period is "
         f"{change_percentage:+.1f}%."
     )
+# --------------------------------------------------
+# PREPARE DAILY SALES DATA
+# --------------------------------------------------
 
+daily_sales = (
+    df.groupby("Date", as_index=False)["Sales"]
+    .sum()
+    .sort_values("Date")
+    .reset_index(drop=True)
+)
+# --------------------------------------------------
+# ANOMALY DETECTION
+# --------------------------------------------------
+
+st.divider()
+
+st.subheader("🚨 Sales Anomaly Detection")
+
+daily_analysis = daily_sales.copy()
+
+# Calculate rolling statistics using the previous 30 days
+daily_analysis["rolling_mean"] = (
+    daily_analysis["Sales"]
+    .rolling(window=30)
+    .mean()
+    .shift(1)
+)
+
+daily_analysis["rolling_std"] = (
+    daily_analysis["Sales"]
+    .rolling(window=30)
+    .std()
+    .shift(1)
+)
+
+# Define upper and lower boundaries
+daily_analysis["upper_limit"] = (
+    daily_analysis["rolling_mean"]
+    + 2 * daily_analysis["rolling_std"]
+)
+
+daily_analysis["lower_limit"] = (
+    daily_analysis["rolling_mean"]
+    - 2 * daily_analysis["rolling_std"]
+)
+
+# Identify anomalies
+daily_analysis["is_anomaly"] = (
+    (daily_analysis["Sales"] > daily_analysis["upper_limit"])
+    | (daily_analysis["Sales"] < daily_analysis["lower_limit"])
+)
+
+anomalies = daily_analysis[
+    daily_analysis["is_anomaly"]
+].copy()
+
+if anomalies.empty:
+
+    st.success(
+        "✅ No significant sales anomalies detected."
+    )
+
+else:
+
+    st.warning(
+        f"⚠️ {len(anomalies)} unusual sales days detected."
+    )
+
+    display_anomalies = anomalies[
+        ["Date", "Sales", "rolling_mean"]
+    ].copy()
+
+    display_anomalies["Difference (%)"] = (
+        (
+            display_anomalies["Sales"]
+            - display_anomalies["rolling_mean"]
+        )
+        / display_anomalies["rolling_mean"]
+        * 100
+    )
+
+    display_anomalies["Date"] = (
+        display_anomalies["Date"]
+        .dt.strftime("%d %b %Y")
+    )
+
+    display_anomalies["Sales"] = (
+        display_anomalies["Sales"]
+        .round(0)
+    )
+
+    display_anomalies["rolling_mean"] = (
+        display_anomalies["rolling_mean"]
+        .round(0)
+    )
+
+    display_anomalies["Difference (%)"] = (
+        display_anomalies["Difference (%)"]
+        .round(1)
+    )
+
+    display_anomalies = display_anomalies.sort_values(
+        "Difference (%)",
+        key=lambda x: x.abs(),
+        ascending=False
+    )
+
+    st.dataframe(
+        display_anomalies.head(10),
+        use_container_width=True,
+        hide_index=True
+    )
 
 # --------------------------------------------------
 # FUTURE FORECASTING
@@ -233,19 +344,6 @@ forecast_days = st.selectbox(
     [7, 30],
     format_func=lambda x: f"Next {x} Days"
 )
-
-
-# --------------------------------------------------
-# PREPARE DAILY SALES DATA
-# --------------------------------------------------
-
-daily_sales = (
-    df.groupby("Date", as_index=False)["Sales"]
-    .sum()
-    .sort_values("Date")
-    .reset_index(drop=True)
-)
-
 
 # --------------------------------------------------
 # CREATE FEATURES FOR FUTURE DATE
