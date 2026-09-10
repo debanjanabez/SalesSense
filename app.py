@@ -325,12 +325,179 @@ else:
         use_container_width=True,
         hide_index=True
     )
+    # --------------------------------------------------
+# INVENTORY RECOMMENDATIONS
+# --------------------------------------------------
+
+st.divider()
+
+st.subheader("📦 Inventory Recommendations")
+
+# Calculate overall product demand
+product_demand = (
+    df.groupby(["Product", "Category"])
+    .agg(
+        Total_Units=("Units", "sum"),
+        Average_Daily_Units=("Units", "mean"),
+        Total_Sales=("Sales", "sum")
+    )
+    .reset_index()
+)
+
+# Calculate recent 7-day demand
+latest_date = df["Date"].max()
+
+recent_7_days = df[
+    df["Date"] > latest_date - pd.Timedelta(days=7)
+]
+
+recent_demand = (
+    recent_7_days.groupby("Product")["Units"]
+    .mean()
+    .reset_index()
+    .rename(columns={"Units": "Recent_7_Day_Avg"})
+)
+
+# Combine demand information
+product_demand = product_demand.merge(
+    recent_demand,
+    on="Product",
+    how="left"
+)
+
+st.dataframe(
+    product_demand,
+    use_container_width=True,
+    hide_index=True
+)
+# Calculate demand trend
+product_demand["Demand_Trend_%"] = (
+    (
+        product_demand["Recent_7_Day_Avg"]
+        - product_demand["Average_Daily_Units"]
+    )
+    / product_demand["Average_Daily_Units"]
+    * 100
+)
+
+# Estimate units needed for the next 14 days
+product_demand["Estimated_14_Day_Demand"] = (
+    product_demand["Recent_7_Day_Avg"] * 14
+)
+
+# Generate inventory recommendations
+def inventory_recommendation(trend):
+    if trend >= 15:
+        return "🔴 Stock Up"
+    elif trend >= 5:
+        return "🟡 Monitor"
+    else:
+        return "🟢 Stock Level OK"
+
+product_demand["Recommendation"] = (
+    product_demand["Demand_Trend_%"]
+    .apply(inventory_recommendation)
+)
+
+# Sort products by urgency
+product_demand = product_demand.sort_values(
+    "Demand_Trend_%",
+    ascending=False
+)
+
+st.subheader("📋 Recommended Inventory Actions")
+
+display_inventory = product_demand[
+    [
+        "Product",
+        "Category",
+        "Average_Daily_Units",
+        "Recent_7_Day_Avg",
+        "Demand_Trend_%",
+        "Estimated_14_Day_Demand",
+        "Recommendation"
+    ]
+].copy()
+
+display_inventory["Average_Daily_Units"] = (
+    display_inventory["Average_Daily_Units"].round(1)
+)
+
+display_inventory["Recent_7_Day_Avg"] = (
+    display_inventory["Recent_7_Day_Avg"].round(1)
+)
+
+display_inventory["Demand_Trend_%"] = (
+    display_inventory["Demand_Trend_%"].round(1)
+)
+
+display_inventory["Estimated_14_Day_Demand"] = (
+    display_inventory["Estimated_14_Day_Demand"].round(0)
+)
+
+st.dataframe(
+    display_inventory,
+    use_container_width=True,
+    hide_index=True
+)
 
 # --------------------------------------------------
 # FUTURE FORECASTING
 # --------------------------------------------------
 
 st.divider()
+# Recommendation summary
+stock_up_count = (
+    product_demand["Recommendation"] == "🔴 Stock Up"
+).sum()
+
+monitor_count = (
+    product_demand["Recommendation"] == "🟡 Monitor"
+).sum()
+
+ok_count = (
+    product_demand["Recommendation"] == "🟢 Stock Level OK"
+).sum()
+
+col1, col2, col3 = st.columns(3)
+
+with col1:
+    st.metric("🔴 Stock Up", stock_up_count)
+
+with col2:
+    st.metric("🟡 Monitor", monitor_count)
+
+with col3:
+    st.metric("🟢 Stock Level OK", ok_count)
+# Priority products
+st.subheader("🚨 Priority Products")
+
+priority_products = product_demand[
+    product_demand["Recommendation"] == "🔴 Stock Up"
+].head(5)
+
+if priority_products.empty:
+    st.success("✅ No products currently require urgent restocking.")
+else:
+    st.dataframe(
+        priority_products[
+            [
+                "Product",
+                "Category",
+                "Recent_7_Day_Avg",
+                "Demand_Trend_%",
+                "Estimated_14_Day_Demand",
+            ]
+        ].rename(
+            columns={
+                "Recent_7_Day_Avg": "Recent Daily Demand",
+                "Demand_Trend_%": "Demand Increase (%)",
+                "Estimated_14_Day_Demand": "14-Day Estimated Demand",
+            }
+        ),
+        use_container_width=True,
+        hide_index=True
+    )
 
 st.subheader("🔮 Future Sales Forecast")
 
