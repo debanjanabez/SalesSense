@@ -4,7 +4,9 @@ from pathlib import Path
 import joblib
 import pandas as pd
 import streamlit as st
-
+from ml.model import compare_models
+from ml.feature_engineering import create_features
+from sklearn.model_selection import train_test_split
 
 # --------------------------------------------------
 # PATHS
@@ -666,4 +668,68 @@ if st.button("🚀 Generate Forecast", type="primary"):
         display_forecast,
         use_container_width=True,
         hide_index=True
+    )
+# --------------------------------------------------
+# MODEL COMPARISON
+# --------------------------------------------------
+
+st.divider()
+
+st.subheader("🤖 Model Comparison")
+
+st.write(
+    "Compare different machine learning models using the same "
+    "historical sales data."
+)
+
+# Prepare data for model comparison
+comparison_data = daily_sales.copy()
+
+comparison_features = create_features(comparison_data)
+
+X = comparison_features.drop(columns=["Date", "Sales"])
+y = comparison_features["Sales"]
+
+# Chronological train/test split
+split_index = int(len(comparison_features) * 0.8)
+
+X_train = X.iloc[:split_index]
+X_test = X.iloc[split_index:]
+
+y_train = y.iloc[:split_index]
+y_test = y.iloc[split_index:]
+
+# Run model comparison
+if st.button("🔍 Compare Models"):
+
+    comparison_results = compare_models(
+        X_train,
+        X_test,
+        y_train,
+        y_test
+    )
+
+    comparison_df = pd.DataFrame(comparison_results)
+
+    comparison_df["MAE"] = comparison_df["MAE"].round(2)
+    comparison_df["RMSE"] = comparison_df["RMSE"].round(2)
+    comparison_df["R²"] = comparison_df["R²"].round(4)
+
+    st.dataframe(
+        comparison_df,
+        use_container_width=True,
+        hide_index=True
+    )
+
+    # Find the best model based on R²
+    best_model = comparison_df.loc[
+        comparison_df["R²"].idxmax(),
+        "Model"
+    ]
+
+    best_r2 = comparison_df["R²"].max()
+
+    st.success(
+        f"🏆 Best performing model: **{best_model}** "
+        f"with an R² score of **{best_r2:.2%}**."
     )
