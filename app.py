@@ -6,7 +6,6 @@ import pandas as pd
 import streamlit as st
 from ml.model import compare_models
 from ml.feature_engineering import create_features
-from sklearn.model_selection import train_test_split
 
 # --------------------------------------------------
 # PATHS
@@ -617,6 +616,52 @@ if st.button("🚀 Generate Forecast", type="primary"):
             f"₹{average_forecast:,.0f}"
         )
 
+    # --------------------------------------------------
+    # FORECAST INSIGHTS
+    # --------------------------------------------------
+
+    last_7_day_average = daily_sales["Sales"].tail(7).mean()
+
+    forecast_change = (
+        (average_forecast - last_7_day_average)
+        / last_7_day_average
+        * 100
+    )
+
+    peak_forecast = forecast_df.loc[
+        forecast_df["Predicted Sales"].idxmax()
+    ]
+
+    lowest_forecast = forecast_df.loc[
+        forecast_df["Predicted Sales"].idxmin()
+    ]
+
+    st.subheader("💡 Forecast Insights")
+
+    insight_col1, insight_col2, insight_col3 = st.columns(3)
+
+    with insight_col1:
+        st.metric(
+            "Forecast vs Recent",
+            f"{forecast_change:+.1f}%"
+        )
+
+    with insight_col2:
+        st.metric(
+            "📈 Peak Forecast",
+            f"₹{peak_forecast['Predicted Sales']:,.0f}"
+        )
+
+    with insight_col3:
+        st.metric(
+            "📉 Lowest Forecast",
+            f"₹{lowest_forecast['Predicted Sales']:,.0f}"
+        )
+
+    st.info(
+        f"📅 Peak expected sales: "
+        f"**{peak_forecast['Date'].strftime('%d %b %Y')}**"
+    )
 
     # --------------------------------------------------
     # FORECAST CHART
@@ -646,7 +691,6 @@ if st.button("🚀 Generate Forecast", type="primary"):
 
     st.line_chart(combined_chart)
 
-
     # --------------------------------------------------
     # FORECAST TABLE
     # --------------------------------------------------
@@ -669,6 +713,7 @@ if st.button("🚀 Generate Forecast", type="primary"):
         use_container_width=True,
         hide_index=True
     )
+
 # --------------------------------------------------
 # MODEL COMPARISON
 # --------------------------------------------------
