@@ -805,6 +805,12 @@ elif page == "Forecast":
             use_container_width=True,
             hide_index=True
         )
+        st.download_button(
+            label="⬇️ Download Forecast CSV",
+            data=forecast_df.to_csv(index=False).encode("utf-8"),
+            file_name=f"sales_forecast_{forecast_days}_days.csv",
+            mime="text/csv"
+)
 
 
 
