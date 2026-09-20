@@ -109,6 +109,63 @@ daily_sales = (
 
 
 if page == "Overview":
+        # --------------------------------------------------
+    # DASHBOARD FILTERS
+    # --------------------------------------------------
+
+    st.subheader("🎛️ Dashboard Filters")
+
+    filter_col1, filter_col2, filter_col3 = st.columns(3)
+
+    with filter_col1:
+        selected_category = st.selectbox(
+            "Category",
+            ["All Categories"] + sorted(df["Category"].unique().tolist())
+        )
+
+    with filter_col2:
+        selected_product = st.selectbox(
+            "Product",
+            ["All Products"] + sorted(df["Product"].unique().tolist())
+        )
+
+    with filter_col3:
+        min_date = df["Date"].min().date()
+        max_date = df["Date"].max().date()
+
+        selected_dates = st.date_input(
+            "Date Range",
+            value=(min_date, max_date),
+            min_value=min_date,
+            max_value=max_date
+        )
+
+    # Apply filters
+    filtered_df = df.copy()
+
+    if selected_category != "All Categories":
+        filtered_df = filtered_df[
+            filtered_df["Category"] == selected_category
+        ]
+
+    if selected_product != "All Products":
+        filtered_df = filtered_df[
+            filtered_df["Product"] == selected_product
+        ]
+
+    if len(selected_dates) == 2:
+        start_date, end_date = selected_dates
+
+        filtered_df = filtered_df[
+            (filtered_df["Date"].dt.date >= start_date)
+            & (filtered_df["Date"].dt.date <= end_date)
+        ]
+
+    st.caption(
+        f"Showing {len(filtered_df):,} sales records"
+    )
+
+    st.divider()
 
     # --------------------------------------------------
     # KPI CARDS
@@ -119,29 +176,26 @@ if page == "Overview":
     with col1:
         st.metric(
             "Total Sales",
-            f"₹{df['Sales'].sum():,.0f}"
+            f"₹{filtered_df['Sales'].sum():,.0f}"
         )
 
     with col2:
         st.metric(
-            "Average Daily Sales",
-            f"₹{df['Sales'].mean():,.0f}"
+            "Average Sales",
+            f"₹{filtered_df['Sales'].mean():,.0f}"
         )
 
     with col3:
         st.metric(
-            "Highest Sales",
-            f"₹{df['Sales'].max():,.0f}"
+            "Highest Sale",
+            f"₹{filtered_df['Sales'].max():,.0f}"
         )
 
     with col4:
         st.metric(
             "Sales Records",
-            f"{len(df):,}"
+            f"{len(filtered_df):,}"
         )
-
-
-    st.divider()
 
 
     # --------------------------------------------------
@@ -150,7 +204,7 @@ if page == "Overview":
 
     st.subheader("📊 Sales Trend")
 
-    chart_data = df.set_index("Date")[["Sales"]]
+    chart_data = filtered_df.set_index("Date")[["Sales"]]
 
     st.line_chart(chart_data)
     # --------------------------------------------------
@@ -162,7 +216,7 @@ if page == "Overview":
     st.subheader("📊 Sales by Category")
 
     category_sales = (
-        df.groupby("Category")["Sales"]
+        filtered_df.groupby("Category")["Sales"]
         .sum()
         .sort_values(ascending=False)
     )
@@ -177,7 +231,7 @@ if page == "Overview":
     st.subheader("🏆 Top Performing Products")
 
     product_sales = (
-        df.groupby("Product")["Sales"]
+        filtered_df.groupby("Product")["Sales"]
         .sum()
         .sort_values(ascending=False)
         .head(10)
