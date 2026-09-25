@@ -29,9 +29,6 @@ def load_rossmann_data(store_id=1):
     # Sort chronologically
     sales = sales.sort_values("Date").reset_index(drop=True)
 
-    # Keep only days when store was open
-    sales = sales[sales["Open"] == 1].copy()
-
     # Calendar features
     sales["day"] = sales["Date"].dt.day
     sales["month"] = sales["Date"].dt.month
@@ -73,6 +70,11 @@ def load_rossmann_data(store_id=1):
     sales["Promo2SinceWeek"] = sales["Promo2SinceWeek"].fillna(0)
     sales["Promo2SinceYear"] = sales["Promo2SinceYear"].fillna(0)
     sales["PromoInterval"] = sales["PromoInterval"].fillna("None")
+
+    # Keep only days when the store was open AFTER creating lag/rolling features.
+    # This makes lag_1/lag_7/etc. refer to calendar days rather than
+    # the previous open day.
+    sales = sales[sales["Open"] == 1].copy()
 
     # Remove only rows where lag/rolling features cannot be calculated
     required_features = [
