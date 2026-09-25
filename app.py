@@ -6,6 +6,7 @@ import pandas as pd
 import streamlit as st
 from ml.model import compare_models
 from ml.feature_engineering import create_features
+from ml.rossmann_preprocessing import load_rossmann_data
 
 # --------------------------------------------------
 # PATHS
@@ -16,6 +17,7 @@ PROJECT_ROOT = Path(__file__).parent
 DATA_PATH = PROJECT_ROOT / "data" / "sample_sales.csv"
 MODEL_PATH = PROJECT_ROOT / "models" / "xgboost_sales_model.joblib"
 FEATURE_COLUMNS_PATH = PROJECT_ROOT / "models" / "feature_columns.json"
+ROSSMANN_MODEL_PATH = PROJECT_ROOT / "models" / "rossmann_model_store1.joblib"
 
 
 # --------------------------------------------------
@@ -27,6 +29,79 @@ st.set_page_config(
     page_icon="📈",
     layout="wide"
 )
+
+
+# --------------------------------------------------
+# ROSSMANN HELPERS
+# --------------------------------------------------
+
+@st.cache_data
+def load_rossmann_store(store_id):
+    return load_rossmann_data(store_id=store_id)
+
+
+@st.cache_resource
+def load_rossmann_model():
+    # The current Rossmann model is trained for Store 1.
+    # If another store is selected, the dashboard trains that store's model
+    # on demand so the selector remains functional.
+    from xgboost import XGBRegressor
+
+    df_r = load_rossmann_data(store_id=1)
+    feature_columns_r = [
+        "DayOfWeek", "Promo", "SchoolHoliday",
+        "day", "month", "year", "week_of_year",
+        "lag_1", "lag_7", "lag_14", "lag_30",
+        "rolling_mean_7", "rolling_mean_14", "rolling_mean_30",
+    ]
+
+    X = df_r[feature_columns_r].copy()
+    X["state_holiday"] = df_r["StateHoliday"].astype(str).map(
+        {"0": 0, "a": 1, "b": 2, "c": 3}
+    ).fillna(0)
+    y = df_r["Sales"]
+
+    model = XGBRegressor(
+        objective="reg:squarederror",
+        n_estimators=500,
+        learning_rate=0.05,
+        max_depth=6,
+        subsample=0.8,
+        colsample_bytree=0.8,
+        random_state=42,
+    )
+    model.fit(X, y)
+    return model
+
+
+def train_rossmann_store_model(store_id):
+    from xgboost import XGBRegressor
+
+    df_r = load_rossmann_data(store_id=store_id)
+    feature_columns_r = [
+        "DayOfWeek", "Promo", "SchoolHoliday",
+        "day", "month", "year", "week_of_year",
+        "lag_1", "lag_7", "lag_14", "lag_30",
+        "rolling_mean_7", "rolling_mean_14", "rolling_mean_30",
+    ]
+
+    X = df_r[feature_columns_r].copy()
+    X["state_holiday"] = df_r["StateHoliday"].astype(str).map(
+        {"0": 0, "a": 1, "b": 2, "c": 3}
+    ).fillna(0)
+    y = df_r["Sales"]
+
+    model = XGBRegressor(
+        objective="reg:squarederror",
+        n_estimators=500,
+        learning_rate=0.05,
+        max_depth=6,
+        subsample=0.8,
+        colsample_bytree=0.8,
+        random_state=42,
+    )
+    model.fit(X, y)
+    return model, feature_columns_r + ["state_holiday"]
 
 
 # --------------------------------------------------
@@ -51,16 +126,26 @@ def load_features():
         return json.load(f)
 
 
-model = load_model()
-df = load_data()
-feature_columns = load_features()
-
-
 # --------------------------------------------------
-# SIDEBAR NAVIGATION
+# DATASET + SIDEBAR NAVIGATION
 # --------------------------------------------------
 
 st.sidebar.title("📈 SalesSense")
+
+dataset = st.sidebar.selectbox(
+    "📊 Dataset",
+    ["Demo Dataset", "Rossmann Stores"]
+)
+
+selected_store = 1
+
+if dataset == "Rossmann Stores":
+    selected_store = st.sidebar.selectbox(
+        "🏪 Store",
+        list(range(1, 1116)),
+        format_func=lambda x: f"Store {x}"
+    )
+
 st.sidebar.markdown("### Dashboard")
 
 page = st.sidebar.radio(
@@ -76,6 +161,18 @@ page = st.sidebar.radio(
 
 st.sidebar.divider()
 st.sidebar.caption("AI-powered sales intelligence")
+
+# Load the selected dataset.
+if dataset == "Demo Dataset":
+    model = load_model()
+    df = load_data()
+    feature_columns = load_features()
+    currency = "₹"
+else:
+    df = load_rossmann_store(selected_store)
+    model, rossmann_feature_columns = train_rossmann_store_model(selected_store)
+    feature_columns = rossmann_feature_columns
+    currency = "€"
 
 
 # --------------------------------------------------
@@ -109,201 +206,227 @@ daily_sales = (
 
 
 if page == "Overview":
-        # --------------------------------------------------
-    # DASHBOARD FILTERS
-    # --------------------------------------------------
+    if dataset == "Rossmann Stores":
+        st.subheader(f"🏪 Rossmann Store {selected_store} Overview")
 
-    st.subheader("🎛️ Dashboard Filters")
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
+            st.metric("Total Sales", f"€{df['Sales'].sum():,.0f}")
+        with col2:
+            st.metric("Average Open-Day Sales", f"€{df['Sales'].mean():,.0f}")
+        with col3:
+            st.metric("Average Customers", f"{df['Customers'].mean():,.0f}")
+        with col4:
+            st.metric("Promo Days", f"{int(df['Promo'].sum()):,}")
 
-    filter_col1, filter_col2, filter_col3 = st.columns(3)
+        st.subheader("📊 Sales Trend")
+        st.line_chart(df.set_index("Date")[["Sales"]])
 
-    with filter_col1:
-        selected_category = st.selectbox(
-            "Category",
-            ["All Categories"] + sorted(df["Category"].unique().tolist())
-        )
+        st.subheader("👥 Customers vs Sales")
+        customer_daily = df.set_index("Date")[["Sales", "Customers"]].copy()
+        st.line_chart(customer_daily)
 
-    with filter_col2:
-        selected_product = st.selectbox(
-            "Product",
-            ["All Products"] + sorted(df["Product"].unique().tolist())
-        )
-
-    with filter_col3:
-        min_date = df["Date"].min().date()
-        max_date = df["Date"].max().date()
-
-        selected_dates = st.date_input(
-            "Date Range",
-            value=(min_date, max_date),
-            min_value=min_date,
-            max_value=max_date
-        )
-
-    # Apply filters
-    filtered_df = df.copy()
-
-    if selected_category != "All Categories":
-        filtered_df = filtered_df[
-            filtered_df["Category"] == selected_category
-        ]
-
-    if selected_product != "All Products":
-        filtered_df = filtered_df[
-            filtered_df["Product"] == selected_product
-        ]
-
-    if len(selected_dates) == 2:
-        start_date, end_date = selected_dates
-
-        filtered_df = filtered_df[
-            (filtered_df["Date"].dt.date >= start_date)
-            & (filtered_df["Date"].dt.date <= end_date)
-        ]
-
-    st.caption(
-        f"Showing {len(filtered_df):,} sales records"
-    )
-
-    st.divider()
-
-    # --------------------------------------------------
-    # KPI CARDS
-    # --------------------------------------------------
-
-    col1, col2, col3, col4 = st.columns(4)
-
-    with col1:
-        st.metric(
-            "Total Sales",
-            f"₹{filtered_df['Sales'].sum():,.0f}"
-        )
-
-    with col2:
-        st.metric(
-            "Average Sales",
-            f"₹{filtered_df['Sales'].mean():,.0f}"
-        )
-
-    with col3:
-        st.metric(
-            "Highest Sale",
-            f"₹{filtered_df['Sales'].max():,.0f}"
-        )
-
-    with col4:
-        st.metric(
-            "Sales Records",
-            f"{len(filtered_df):,}"
-        )
-
-
-    # --------------------------------------------------
-    # SALES TREND
-    # --------------------------------------------------
-
-    st.subheader("📊 Sales Trend")
-
-    chart_data = filtered_df.set_index("Date")[["Sales"]]
-
-    st.line_chart(chart_data)
-    # --------------------------------------------------
-    # CATEGORY PERFORMANCE
-    # --------------------------------------------------
-
-    st.divider()
-
-    st.subheader("📊 Sales by Category")
-
-    category_sales = (
-        filtered_df.groupby("Category")["Sales"]
-        .sum()
-        .sort_values(ascending=False)
-    )
-
-    st.bar_chart(category_sales)
-    # --------------------------------------------------
-    # TOP PRODUCTS
-    # --------------------------------------------------
-
-    st.divider()
-
-    st.subheader("🏆 Top Performing Products")
-
-    product_sales = (
-        filtered_df.groupby("Product")["Sales"]
-        .sum()
-        .sort_values(ascending=False)
-        .head(10)
-    )
-
-    st.bar_chart(product_sales)
-    # --------------------------------------------------
-    # BUSINESS INSIGHTS
-    # --------------------------------------------------
-
-    st.divider()
-
-    st.subheader("💡 Business Insights")
-
-    total_sales = df["Sales"].sum()
-    average_daily_sales = df["Sales"].mean()
-    highest_daily_sales = df["Sales"].max()
-
-    best_category = category_sales.index[0]
-    best_category_sales = category_sales.iloc[0]
-
-    best_product = product_sales.index[0]
-    best_product_sales = product_sales.iloc[0]
-
-    st.markdown(
-        f"""
-        ### 📈 Overall Performance
-
-        - **Total sales:** ₹{total_sales:,.0f}
-        - **Average daily sales:** ₹{average_daily_sales:,.0f}
-        - **Highest recorded sale:** ₹{highest_daily_sales:,.0f}
-
-        ### 🏆 Top Performers
-
-        - **Best category:** {best_category} — ₹{best_category_sales:,.0f}
-        - **Top product:** {best_product} — ₹{best_product_sales:,.0f}
-        """
-    )
-    # --------------------------------------------------
-    # SALES TREND ANALYSIS
-    # --------------------------------------------------
-
-    recent_sales = df.sort_values("Date").tail(7)["Sales"].mean()
-    previous_sales = df.sort_values("Date").iloc[-14:-7]["Sales"].mean()
-
-    change_percentage = (
-        (recent_sales - previous_sales)
-        / previous_sales
-    ) * 100
-
-    st.subheader("📈 Sales Trend")
-
-    if change_percentage > 5:
-        st.success(
-            f"📈 Sales are increasing. "
-            f"Recent sales are {change_percentage:.1f}% higher "
-            f"than the previous 7-day period."
-        )
-
-    elif change_percentage < -5:
-        st.warning(
-            f"📉 Sales are declining. "
-            f"Recent sales are {abs(change_percentage):.1f}% lower "
-            f"than the previous 7-day period."
-        )
-
-    else:
         st.info(
-            f"➡️ Sales are relatively stable. "
-            f"The change over the previous 7-day period is "
-            f"{change_percentage:+.1f}%."
+            "Rossmann data is real historical retail data. "
+            "Customer count is shown as a demand signal; it is not used "
+            "as a future forecasting input because future customers are unknown."
         )
+    else:
+                # --------------------------------------------------
+            # DASHBOARD FILTERS
+            # --------------------------------------------------
+
+            st.subheader("🎛️ Dashboard Filters")
+
+            filter_col1, filter_col2, filter_col3 = st.columns(3)
+
+            with filter_col1:
+                selected_category = st.selectbox(
+                    "Category",
+                    ["All Categories"] + sorted(df["Category"].unique().tolist())
+                )
+
+            with filter_col2:
+                selected_product = st.selectbox(
+                    "Product",
+                    ["All Products"] + sorted(df["Product"].unique().tolist())
+                )
+
+            with filter_col3:
+                min_date = df["Date"].min().date()
+                max_date = df["Date"].max().date()
+
+                selected_dates = st.date_input(
+                    "Date Range",
+                    value=(min_date, max_date),
+                    min_value=min_date,
+                    max_value=max_date
+                )
+
+            # Apply filters
+            filtered_df = df.copy()
+
+            if selected_category != "All Categories":
+                filtered_df = filtered_df[
+                    filtered_df["Category"] == selected_category
+                ]
+
+            if selected_product != "All Products":
+                filtered_df = filtered_df[
+                    filtered_df["Product"] == selected_product
+                ]
+
+            if len(selected_dates) == 2:
+                start_date, end_date = selected_dates
+
+                filtered_df = filtered_df[
+                    (filtered_df["Date"].dt.date >= start_date)
+                    & (filtered_df["Date"].dt.date <= end_date)
+                ]
+
+            st.caption(
+                f"Showing {len(filtered_df):,} sales records"
+            )
+
+            st.divider()
+
+            # --------------------------------------------------
+            # KPI CARDS
+            # --------------------------------------------------
+
+            col1, col2, col3, col4 = st.columns(4)
+
+            with col1:
+                st.metric(
+                    "Total Sales",
+                    f"₹{filtered_df['Sales'].sum():,.0f}"
+                )
+
+            with col2:
+                st.metric(
+                    "Average Sales",
+                    f"₹{filtered_df['Sales'].mean():,.0f}"
+                )
+
+            with col3:
+                st.metric(
+                    "Highest Sale",
+                    f"₹{filtered_df['Sales'].max():,.0f}"
+                )
+
+            with col4:
+                st.metric(
+                    "Sales Records",
+                    f"{len(filtered_df):,}"
+                )
+
+
+            # --------------------------------------------------
+            # SALES TREND
+            # --------------------------------------------------
+
+            st.subheader("📊 Sales Trend")
+
+            chart_data = filtered_df.set_index("Date")[["Sales"]]
+
+            st.line_chart(chart_data)
+            # --------------------------------------------------
+            # CATEGORY PERFORMANCE
+            # --------------------------------------------------
+
+            st.divider()
+
+            st.subheader("📊 Sales by Category")
+
+            category_sales = (
+                filtered_df.groupby("Category")["Sales"]
+                .sum()
+                .sort_values(ascending=False)
+            )
+
+            st.bar_chart(category_sales)
+            # --------------------------------------------------
+            # TOP PRODUCTS
+            # --------------------------------------------------
+
+            st.divider()
+
+            st.subheader("🏆 Top Performing Products")
+
+            product_sales = (
+                filtered_df.groupby("Product")["Sales"]
+                .sum()
+                .sort_values(ascending=False)
+                .head(10)
+            )
+
+            st.bar_chart(product_sales)
+            # --------------------------------------------------
+            # BUSINESS INSIGHTS
+            # --------------------------------------------------
+
+            st.divider()
+
+            st.subheader("💡 Business Insights")
+
+            total_sales = df["Sales"].sum()
+            average_daily_sales = df["Sales"].mean()
+            highest_daily_sales = df["Sales"].max()
+
+            best_category = category_sales.index[0]
+            best_category_sales = category_sales.iloc[0]
+
+            best_product = product_sales.index[0]
+            best_product_sales = product_sales.iloc[0]
+
+            st.markdown(
+                f"""
+                ### 📈 Overall Performance
+
+                - **Total sales:** ₹{total_sales:,.0f}
+                - **Average daily sales:** ₹{average_daily_sales:,.0f}
+                - **Highest recorded sale:** ₹{highest_daily_sales:,.0f}
+
+                ### 🏆 Top Performers
+
+                - **Best category:** {best_category} — ₹{best_category_sales:,.0f}
+                - **Top product:** {best_product} — ₹{best_product_sales:,.0f}
+                """
+            )
+            # --------------------------------------------------
+            # SALES TREND ANALYSIS
+            # --------------------------------------------------
+
+            recent_sales = df.sort_values("Date").tail(7)["Sales"].mean()
+            previous_sales = df.sort_values("Date").iloc[-14:-7]["Sales"].mean()
+
+            change_percentage = (
+                (recent_sales - previous_sales)
+                / previous_sales
+            ) * 100
+
+            st.subheader("📈 Sales Trend")
+
+            if change_percentage > 5:
+                st.success(
+                    f"📈 Sales are increasing. "
+                    f"Recent sales are {change_percentage:.1f}% higher "
+                    f"than the previous 7-day period."
+                )
+
+            elif change_percentage < -5:
+                st.warning(
+                    f"📉 Sales are declining. "
+                    f"Recent sales are {abs(change_percentage):.1f}% lower "
+                    f"than the previous 7-day period."
+                )
+
+            else:
+                st.info(
+                    f"➡️ Sales are relatively stable. "
+                    f"The change over the previous 7-day period is "
+                    f"{change_percentage:+.1f}%."
+                )
 
 
 elif page == "Anomaly Detection":
@@ -413,404 +536,511 @@ elif page == "Anomaly Detection":
     
 
 elif page == "Inventory":
+    if dataset == "Rossmann Stores":
+        st.subheader("📦 Customer Demand Signals")
 
-    # --------------------------------------------------
-    # INVENTORY RECOMMENDATIONS
-    # --------------------------------------------------
-
-    st.divider()
-
-    st.subheader("📦 Inventory Recommendations")
-
-    # Calculate overall product demand
-    product_demand = (
-        df.groupby(["Product", "Category"])
-        .agg(
-            Total_Units=("Units", "sum"),
-            Average_Daily_Units=("Units", "mean"),
-            Total_Sales=("Sales", "sum")
+        demand = df[["Date", "Sales", "Customers", "Promo"]].copy()
+        demand["Sales_per_Customer"] = (
+            demand["Sales"] / demand["Customers"].replace(0, pd.NA)
         )
-        .reset_index()
-    )
 
-    # Calculate recent 7-day demand
-    latest_date = df["Date"].max()
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            st.metric("Avg Daily Customers", f"{df['Customers'].mean():,.0f}")
+        with c2:
+            st.metric("Avg Daily Sales", f"€{df['Sales'].mean():,.0f}")
+        with c3:
+            st.metric("Promo Days", f"{int(df['Promo'].sum()):,}")
 
-    recent_7_days = df[
-        df["Date"] > latest_date - pd.Timedelta(days=7)
-    ]
-
-    recent_demand = (
-        recent_7_days.groupby("Product")["Units"]
-        .mean()
-        .reset_index()
-        .rename(columns={"Units": "Recent_7_Day_Avg"})
-    )
-
-    # Combine demand information
-    product_demand = product_demand.merge(
-        recent_demand,
-        on="Product",
-        how="left"
-    )
-
-    st.dataframe(
-        product_demand,
-        use_container_width=True,
-        hide_index=True
-    )
-    # Calculate demand trend
-    product_demand["Demand_Trend_%"] = (
-        (
-            product_demand["Recent_7_Day_Avg"]
-            - product_demand["Average_Daily_Units"]
+        st.subheader("📈 Recent Demand")
+        st.line_chart(
+            df.tail(60).set_index("Date")[["Customers", "Sales"]]
         )
-        / product_demand["Average_Daily_Units"]
-        * 100
-    )
 
-    # Estimate units needed for the next 14 days
-    product_demand["Estimated_14_Day_Demand"] = (
-        product_demand["Recent_7_Day_Avg"] * 14
-    )
-
-    # Generate inventory recommendations
-    def inventory_recommendation(trend):
-        if trend >= 15:
-            return "🔴 Stock Up"
-        elif trend >= 5:
-            return "🟡 Monitor"
-        else:
-            return "🟢 Stock Level OK"
-
-    product_demand["Recommendation"] = (
-        product_demand["Demand_Trend_%"]
-        .apply(inventory_recommendation)
-    )
-
-    # Sort products by urgency
-    product_demand = product_demand.sort_values(
-        "Demand_Trend_%",
-        ascending=False
-    )
-
-    st.subheader("📋 Recommended Inventory Actions")
-
-    display_inventory = product_demand[
-        [
-            "Product",
-            "Category",
-            "Average_Daily_Units",
-            "Recent_7_Day_Avg",
-            "Demand_Trend_%",
-            "Estimated_14_Day_Demand",
-            "Recommendation"
-        ]
-    ].copy()
-
-    display_inventory["Average_Daily_Units"] = (
-        display_inventory["Average_Daily_Units"].round(1)
-    )
-
-    display_inventory["Recent_7_Day_Avg"] = (
-        display_inventory["Recent_7_Day_Avg"].round(1)
-    )
-
-    display_inventory["Demand_Trend_%"] = (
-        display_inventory["Demand_Trend_%"].round(1)
-    )
-
-    display_inventory["Estimated_14_Day_Demand"] = (
-        display_inventory["Estimated_14_Day_Demand"].round(0)
-    )
-
-    st.dataframe(
-        display_inventory,
-        use_container_width=True,
-        hide_index=True
-    )
-
-    # --------------------------------------------------
-    # FUTURE FORECASTING
-    # --------------------------------------------------
-
-    st.divider()
-    # Recommendation summary
-    stock_up_count = (
-        product_demand["Recommendation"] == "🔴 Stock Up"
-    ).sum()
-
-    monitor_count = (
-        product_demand["Recommendation"] == "🟡 Monitor"
-    ).sum()
-
-    ok_count = (
-        product_demand["Recommendation"] == "🟢 Stock Level OK"
-    ).sum()
-
-    col1, col2, col3 = st.columns(3)
-
-    with col1:
-        st.metric("🔴 Stock Up", stock_up_count)
-
-    with col2:
-        st.metric("🟡 Monitor", monitor_count)
-
-    with col3:
-        st.metric("🟢 Stock Level OK", ok_count)
-    # Priority products
-    st.subheader("🚨 Priority Products")
-
-    priority_products = product_demand[
-        product_demand["Recommendation"] == "🔴 Stock Up"
-    ].head(5)
-
-    if priority_products.empty:
-        st.success("✅ No products currently require urgent restocking.")
-    else:
+        st.subheader("📋 Demand Signals")
         st.dataframe(
-            priority_products[
-                [
-                    "Product",
-                    "Category",
-                    "Recent_7_Day_Avg",
-                    "Demand_Trend_%",
-                    "Estimated_14_Day_Demand",
-                ]
-            ].rename(
-                columns={
-                    "Recent_7_Day_Avg": "Recent Daily Demand",
-                    "Demand_Trend_%": "Demand Increase (%)",
-                    "Estimated_14_Day_Demand": "14-Day Estimated Demand",
-                }
-            ),
+            demand.tail(30).sort_values("Date", ascending=False),
+            use_container_width=True,
+            hide_index=True
+        )
+    else:
+
+        # --------------------------------------------------
+        # INVENTORY RECOMMENDATIONS
+        # --------------------------------------------------
+
+        st.divider()
+
+        st.subheader("📦 Inventory Recommendations")
+
+        # Calculate overall product demand
+        product_demand = (
+            df.groupby(["Product", "Category"])
+            .agg(
+                Total_Units=("Units", "sum"),
+                Average_Daily_Units=("Units", "mean"),
+                Total_Sales=("Sales", "sum")
+            )
+            .reset_index()
+        )
+
+        # Calculate recent 7-day demand
+        latest_date = df["Date"].max()
+
+        recent_7_days = df[
+            df["Date"] > latest_date - pd.Timedelta(days=7)
+        ]
+
+        recent_demand = (
+            recent_7_days.groupby("Product")["Units"]
+            .mean()
+            .reset_index()
+            .rename(columns={"Units": "Recent_7_Day_Avg"})
+        )
+
+        # Combine demand information
+        product_demand = product_demand.merge(
+            recent_demand,
+            on="Product",
+            how="left"
+        )
+
+        st.dataframe(
+            product_demand,
+            use_container_width=True,
+            hide_index=True
+        )
+        # Calculate demand trend
+        product_demand["Demand_Trend_%"] = (
+            (
+                product_demand["Recent_7_Day_Avg"]
+                - product_demand["Average_Daily_Units"]
+            )
+            / product_demand["Average_Daily_Units"]
+            * 100
+        )
+
+        # Estimate units needed for the next 14 days
+        product_demand["Estimated_14_Day_Demand"] = (
+            product_demand["Recent_7_Day_Avg"] * 14
+        )
+
+        # Generate inventory recommendations
+        def inventory_recommendation(trend):
+            if trend >= 15:
+                return "🔴 Stock Up"
+            elif trend >= 5:
+                return "🟡 Monitor"
+            else:
+                return "🟢 Stock Level OK"
+
+        product_demand["Recommendation"] = (
+            product_demand["Demand_Trend_%"]
+            .apply(inventory_recommendation)
+        )
+
+        # Sort products by urgency
+        product_demand = product_demand.sort_values(
+            "Demand_Trend_%",
+            ascending=False
+        )
+
+        st.subheader("📋 Recommended Inventory Actions")
+
+        display_inventory = product_demand[
+            [
+                "Product",
+                "Category",
+                "Average_Daily_Units",
+                "Recent_7_Day_Avg",
+                "Demand_Trend_%",
+                "Estimated_14_Day_Demand",
+                "Recommendation"
+            ]
+        ].copy()
+
+        display_inventory["Average_Daily_Units"] = (
+            display_inventory["Average_Daily_Units"].round(1)
+        )
+
+        display_inventory["Recent_7_Day_Avg"] = (
+            display_inventory["Recent_7_Day_Avg"].round(1)
+        )
+
+        display_inventory["Demand_Trend_%"] = (
+            display_inventory["Demand_Trend_%"].round(1)
+        )
+
+        display_inventory["Estimated_14_Day_Demand"] = (
+            display_inventory["Estimated_14_Day_Demand"].round(0)
+        )
+
+        st.dataframe(
+            display_inventory,
             use_container_width=True,
             hide_index=True
         )
 
-
-
-elif page == "Forecast":
-
-    st.subheader("🔮 Future Sales Forecast")
-
-    st.write(
-        "Predict sales for the upcoming days using historical sales patterns "
-        "and the trained XGBoost model."
-    )
-
-    forecast_days = st.selectbox(
-        "Forecast Horizon",
-        [7, 30],
-        format_func=lambda x: f"Next {x} Days"
-    )
-
-    # --------------------------------------------------
-    # CREATE FEATURES FOR FUTURE DATE
-    # --------------------------------------------------
-
-    def create_future_features(history, target_date):
-
-        sales = history["Sales"].tolist()
-
-        features = {
-            "lag_1": sales[-1],
-            "lag_7": sales[-7],
-            "lag_14": sales[-14],
-            "lag_30": sales[-30],
-            "rolling_mean_7": sum(sales[-7:]) / 7,
-            "rolling_mean_14": sum(sales[-14:]) / 14,
-            "rolling_mean_30": sum(sales[-30:]) / 30,
-            "day_of_week": target_date.dayofweek,
-            "month": target_date.month,
-            "quarter": target_date.quarter,
-            "week_of_year": target_date.isocalendar().week,
-            "is_weekend": int(target_date.dayofweek >= 5)
-        }
-
-        return pd.DataFrame([features])
-
-
-    # --------------------------------------------------
-    # GENERATE FUTURE FORECAST
-    # --------------------------------------------------
-
-    if st.button("🚀 Generate Forecast", type="primary"):
-
-        history = daily_sales.copy()
-
-        forecasts = []
-
-        last_date = history["Date"].max()
-
-        for i in range(1, forecast_days + 1):
-
-            future_date = last_date + pd.Timedelta(days=i)
-
-            X_future = create_future_features(
-                history,
-                future_date
-            )
-
-            # Make sure feature order matches training
-            X_future = X_future[feature_columns]
-
-            prediction = model.predict(X_future)[0]
-
-            # Avoid negative sales predictions
-            prediction = max(0, prediction)
-
-            forecasts.append({
-                "Date": future_date,
-                "Predicted Sales": prediction
-            })
-
-            # Add prediction to history
-            history = pd.concat(
-                [
-                    history,
-                    pd.DataFrame({
-                        "Date": [future_date],
-                        "Sales": [prediction]
-                    })
-                ],
-                ignore_index=True
-            )
-
-
-        forecast_df = pd.DataFrame(forecasts)
-
-
         # --------------------------------------------------
-        # FORECAST SUMMARY
+        # FUTURE FORECASTING
         # --------------------------------------------------
 
-        total_forecast = forecast_df["Predicted Sales"].sum()
-        average_forecast = forecast_df["Predicted Sales"].mean()
+        st.divider()
+        # Recommendation summary
+        stock_up_count = (
+            product_demand["Recommendation"] == "🔴 Stock Up"
+        ).sum()
+
+        monitor_count = (
+            product_demand["Recommendation"] == "🟡 Monitor"
+        ).sum()
+
+        ok_count = (
+            product_demand["Recommendation"] == "🟢 Stock Level OK"
+        ).sum()
 
         col1, col2, col3 = st.columns(3)
 
         with col1:
-            st.metric(
-                "Forecast Period",
-                f"{forecast_days} Days"
-            )
+            st.metric("🔴 Stock Up", stock_up_count)
 
         with col2:
-            st.metric(
-                "Expected Sales",
-                f"₹{total_forecast:,.0f}"
-            )
+            st.metric("🟡 Monitor", monitor_count)
 
         with col3:
-            st.metric(
-                "Average Daily Sales",
-                f"₹{average_forecast:,.0f}"
+            st.metric("🟢 Stock Level OK", ok_count)
+        # Priority products
+        st.subheader("🚨 Priority Products")
+
+        priority_products = product_demand[
+            product_demand["Recommendation"] == "🔴 Stock Up"
+        ].head(5)
+
+        if priority_products.empty:
+            st.success("✅ No products currently require urgent restocking.")
+        else:
+            st.dataframe(
+                priority_products[
+                    [
+                        "Product",
+                        "Category",
+                        "Recent_7_Day_Avg",
+                        "Demand_Trend_%",
+                        "Estimated_14_Day_Demand",
+                    ]
+                ].rename(
+                    columns={
+                        "Recent_7_Day_Avg": "Recent Daily Demand",
+                        "Demand_Trend_%": "Demand Increase (%)",
+                        "Estimated_14_Day_Demand": "14-Day Estimated Demand",
+                    }
+                ),
+                use_container_width=True,
+                hide_index=True
             )
 
-        # --------------------------------------------------
-        # FORECAST INSIGHTS
-        # --------------------------------------------------
 
-        last_7_day_average = daily_sales["Sales"].tail(7).mean()
 
-        forecast_change = (
-            (average_forecast - last_7_day_average)
-            / last_7_day_average
-            * 100
+elif page == "Forecast":
+    if dataset == "Rossmann Stores":
+        st.subheader(f"🔮 Store {selected_store} Sales Forecast")
+        st.write(
+            "Predict upcoming sales using the selected Rossmann store's "
+            "historical sales patterns."
         )
 
-        peak_forecast = forecast_df.loc[
-            forecast_df["Predicted Sales"].idxmax()
-        ]
+        forecast_days = st.selectbox(
+            "Forecast Horizon",
+            [7, 30],
+            format_func=lambda x: f"Next {x} Days"
+        )
 
-        lowest_forecast = forecast_df.loc[
-            forecast_df["Predicted Sales"].idxmin()
-        ]
+        if st.button("🚀 Generate Forecast", type="primary"):
+            history = df[["Date", "Sales"]].copy().sort_values("Date")
+            forecasts = []
+            last_date = history["Date"].max()
 
-        st.subheader("💡 Forecast Insights")
+            for i in range(1, forecast_days + 1):
+                future_date = last_date + pd.Timedelta(days=i)
+                sales_values = history["Sales"].tolist()
 
-        insight_col1, insight_col2, insight_col3 = st.columns(3)
+                features = pd.DataFrame([{
+                    "DayOfWeek": future_date.dayofweek + 1,
+                    "Promo": 0,
+                    "SchoolHoliday": 0,
+                    "day": future_date.day,
+                    "month": future_date.month,
+                    "year": future_date.year,
+                    "week_of_year": int(future_date.isocalendar().week),
+                    "lag_1": sales_values[-1],
+                    "lag_7": sales_values[-7],
+                    "lag_14": sales_values[-14],
+                    "lag_30": sales_values[-30],
+                    "rolling_mean_7": sum(sales_values[-7:]) / 7,
+                    "rolling_mean_14": sum(sales_values[-14:]) / 14,
+                    "rolling_mean_30": sum(sales_values[-30:]) / 30,
+                    "state_holiday": 0,
+                }])
 
-        with insight_col1:
-            st.metric(
-                "Forecast vs Recent",
-                f"{forecast_change:+.1f}%"
+                prediction = max(0, float(model.predict(features[feature_columns])[0]))
+
+                forecasts.append({
+                    "Date": future_date,
+                    "Predicted Sales": prediction
+                })
+
+                history = pd.concat([
+                    history,
+                    pd.DataFrame({"Date": [future_date], "Sales": [prediction]})
+                ], ignore_index=True)
+
+            forecast_df = pd.DataFrame(forecasts)
+
+            c1, c2, c3 = st.columns(3)
+            with c1:
+                st.metric("Forecast Period", f"{forecast_days} Days")
+            with c2:
+                st.metric("Expected Sales", f"€{forecast_df['Predicted Sales'].sum():,.0f}")
+            with c3:
+                st.metric("Average Daily Sales", f"€{forecast_df['Predicted Sales'].mean():,.0f}")
+
+            st.subheader("📈 Sales Forecast")
+            history_chart = df.tail(60).set_index("Date")[["Sales"]].rename(
+                columns={"Sales": "Historical Sales"}
+            )
+            forecast_chart = forecast_df.set_index("Date")[["Predicted Sales"]]
+            st.line_chart(pd.concat([history_chart, forecast_chart], axis=1))
+
+            st.subheader("📅 Forecast Details")
+            st.dataframe(forecast_df, use_container_width=True, hide_index=True)
+
+            st.download_button(
+                "⬇️ Download Forecast CSV",
+                data=forecast_df.to_csv(index=False).encode("utf-8"),
+                file_name=f"rossmann_store_{selected_store}_forecast_{forecast_days}_days.csv",
+                mime="text/csv"
+            )
+    else:
+
+        st.subheader("🔮 Future Sales Forecast")
+
+        st.write(
+            "Predict sales for the upcoming days using historical sales patterns "
+            "and the trained XGBoost model."
+        )
+
+        forecast_days = st.selectbox(
+            "Forecast Horizon",
+            [7, 30],
+            format_func=lambda x: f"Next {x} Days"
+        )
+
+        # --------------------------------------------------
+        # CREATE FEATURES FOR FUTURE DATE
+        # --------------------------------------------------
+
+        def create_future_features(history, target_date):
+
+            sales = history["Sales"].tolist()
+
+            features = {
+                "lag_1": sales[-1],
+                "lag_7": sales[-7],
+                "lag_14": sales[-14],
+                "lag_30": sales[-30],
+                "rolling_mean_7": sum(sales[-7:]) / 7,
+                "rolling_mean_14": sum(sales[-14:]) / 14,
+                "rolling_mean_30": sum(sales[-30:]) / 30,
+                "day_of_week": target_date.dayofweek,
+                "month": target_date.month,
+                "quarter": target_date.quarter,
+                "week_of_year": target_date.isocalendar().week,
+                "is_weekend": int(target_date.dayofweek >= 5)
+            }
+
+            return pd.DataFrame([features])
+
+
+        # --------------------------------------------------
+        # GENERATE FUTURE FORECAST
+        # --------------------------------------------------
+
+        if st.button("🚀 Generate Forecast", type="primary"):
+
+            history = daily_sales.copy()
+
+            forecasts = []
+
+            last_date = history["Date"].max()
+
+            for i in range(1, forecast_days + 1):
+
+                future_date = last_date + pd.Timedelta(days=i)
+
+                X_future = create_future_features(
+                    history,
+                    future_date
+                )
+
+                # Make sure feature order matches training
+                X_future = X_future[feature_columns]
+
+                prediction = model.predict(X_future)[0]
+
+                # Avoid negative sales predictions
+                prediction = max(0, prediction)
+
+                forecasts.append({
+                    "Date": future_date,
+                    "Predicted Sales": prediction
+                })
+
+                # Add prediction to history
+                history = pd.concat(
+                    [
+                        history,
+                        pd.DataFrame({
+                            "Date": [future_date],
+                            "Sales": [prediction]
+                        })
+                    ],
+                    ignore_index=True
+                )
+
+
+            forecast_df = pd.DataFrame(forecasts)
+
+
+            # --------------------------------------------------
+            # FORECAST SUMMARY
+            # --------------------------------------------------
+
+            total_forecast = forecast_df["Predicted Sales"].sum()
+            average_forecast = forecast_df["Predicted Sales"].mean()
+
+            col1, col2, col3 = st.columns(3)
+
+            with col1:
+                st.metric(
+                    "Forecast Period",
+                    f"{forecast_days} Days"
+                )
+
+            with col2:
+                st.metric(
+                    "Expected Sales",
+                    f"₹{total_forecast:,.0f}"
+                )
+
+            with col3:
+                st.metric(
+                    "Average Daily Sales",
+                    f"₹{average_forecast:,.0f}"
+                )
+
+            # --------------------------------------------------
+            # FORECAST INSIGHTS
+            # --------------------------------------------------
+
+            last_7_day_average = daily_sales["Sales"].tail(7).mean()
+
+            forecast_change = (
+                (average_forecast - last_7_day_average)
+                / last_7_day_average
+                * 100
             )
 
-        with insight_col2:
-            st.metric(
-                "📈 Peak Forecast",
-                f"₹{peak_forecast['Predicted Sales']:,.0f}"
+            peak_forecast = forecast_df.loc[
+                forecast_df["Predicted Sales"].idxmax()
+            ]
+
+            lowest_forecast = forecast_df.loc[
+                forecast_df["Predicted Sales"].idxmin()
+            ]
+
+            st.subheader("💡 Forecast Insights")
+
+            insight_col1, insight_col2, insight_col3 = st.columns(3)
+
+            with insight_col1:
+                st.metric(
+                    "Forecast vs Recent",
+                    f"{forecast_change:+.1f}%"
+                )
+
+            with insight_col2:
+                st.metric(
+                    "📈 Peak Forecast",
+                    f"₹{peak_forecast['Predicted Sales']:,.0f}"
+                )
+
+            with insight_col3:
+                st.metric(
+                    "📉 Lowest Forecast",
+                    f"₹{lowest_forecast['Predicted Sales']:,.0f}"
+                )
+
+            st.info(
+                f"📅 Peak expected sales: "
+                f"**{peak_forecast['Date'].strftime('%d %b %Y')}**"
             )
 
-        with insight_col3:
-            st.metric(
-                "📉 Lowest Forecast",
-                f"₹{lowest_forecast['Predicted Sales']:,.0f}"
+            # --------------------------------------------------
+            # FORECAST CHART
+            # --------------------------------------------------
+
+            st.subheader("📈 Sales Forecast")
+
+            chart_history = daily_sales.tail(60).copy()
+
+            chart_history = chart_history.rename(
+                columns={"Sales": "Historical Sales"}
             )
 
-        st.info(
-            f"📅 Peak expected sales: "
-            f"**{peak_forecast['Date'].strftime('%d %b %Y')}**"
-        )
+            chart_forecast = forecast_df.set_index("Date")[
+                ["Predicted Sales"]
+            ]
 
-        # --------------------------------------------------
-        # FORECAST CHART
-        # --------------------------------------------------
+            chart_history = chart_history.set_index("Date")
 
-        st.subheader("📈 Sales Forecast")
+            combined_chart = pd.concat(
+                [
+                    chart_history,
+                    chart_forecast
+                ],
+                axis=1
+            )
 
-        chart_history = daily_sales.tail(60).copy()
+            st.line_chart(combined_chart)
 
-        chart_history = chart_history.rename(
-            columns={"Sales": "Historical Sales"}
-        )
+            # --------------------------------------------------
+            # FORECAST TABLE
+            # --------------------------------------------------
 
-        chart_forecast = forecast_df.set_index("Date")[
-            ["Predicted Sales"]
-        ]
+            st.subheader("📅 Forecast Details")
 
-        chart_history = chart_history.set_index("Date")
+            display_forecast = forecast_df.copy()
 
-        combined_chart = pd.concat(
-            [
-                chart_history,
-                chart_forecast
-            ],
-            axis=1
-        )
+            display_forecast["Date"] = (
+                display_forecast["Date"].dt.strftime("%d %b %Y")
+            )
 
-        st.line_chart(combined_chart)
+            display_forecast["Predicted Sales"] = (
+                display_forecast["Predicted Sales"]
+                .round(2)
+            )
 
-        # --------------------------------------------------
-        # FORECAST TABLE
-        # --------------------------------------------------
-
-        st.subheader("📅 Forecast Details")
-
-        display_forecast = forecast_df.copy()
-
-        display_forecast["Date"] = (
-            display_forecast["Date"].dt.strftime("%d %b %Y")
-        )
-
-        display_forecast["Predicted Sales"] = (
-            display_forecast["Predicted Sales"]
-            .round(2)
-        )
-
-        st.dataframe(
-            display_forecast,
-            use_container_width=True,
-            hide_index=True
-        )
-        st.download_button(
-            label="⬇️ Download Forecast CSV",
-            data=forecast_df.to_csv(index=False).encode("utf-8"),
-            file_name=f"sales_forecast_{forecast_days}_days.csv",
-            mime="text/csv"
-)
+            st.dataframe(
+                display_forecast,
+                use_container_width=True,
+                hide_index=True
+            )
+            st.download_button(
+                label="⬇️ Download Forecast CSV",
+                data=forecast_df.to_csv(index=False).encode("utf-8"),
+                file_name=f"sales_forecast_{forecast_days}_days.csv",
+                mime="text/csv"
+    )
 
 
 
